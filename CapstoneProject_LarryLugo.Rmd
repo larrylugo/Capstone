@@ -1,0 +1,145 @@
+---
+title: "Using Sentiment Analysis and Collaborative Filtering methods to predict the review's rating
+based on its text alone from Yelp 2015 data set."
+subtitle: "Capstone Project - Data Science Specialization, Johns Hopkins University-Coursera" 
+author: "Larry Lugo"
+date: "November, 2015"
+output: 
+  pdf_document:
+    template: default
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache=TRUE, fig.path='figs/')
+```
+
+## Introduction
+The continuously popular approach of Collaborative Filtering (CF), has been mostly focusing on the information resource of explicit user numerical ratings feedbacks. However, the ever-growing availability of textual
+user reviews has become an important information resource, where a wealth of explicit product attributes/features and user attitudes/sentiments are expressed therein. This information rich resource of textual reviews have clearly exhibited brand-new approaches to solving many of the important problems that have been perplexing the research community for years, such as the explanation of recommendation and the automatic generation of user or item profiles (Zhang et al., 2015). Recently, the fundamental importance of textual reviews has gained wide recognition, mainly because of the difficulty in formatting, structuring and analyzing the free-texts. In this Data Science Capstone project, Sentiment Analysis of textual reviews and Collaborative Filtering were combined under a mixed approach to predict the review rating on Yelp 2015 data set.
+
+## Methods and Data
+Yelp service has a search engine to sift through over 61 million reviews and help people find the most relevant businesses for their everyday needs. The company offers a rich set of data for research and educational purposes. One of the questions in this year's challenge is "How well can you guess a review's rating from its text alone?" (Yelp, 2015). To answer this question the following method was applied: (i) Based on the YelpÂ´s 5-star rating system, a negative feeling was considered when the review was 2 or less stars. Then, (ii) Text mining methods and a CART (Classification and regression trees) model were applied using R to predict negative or positive (3 or more stars) sentiment in the review, as is explained below.  
+
+### Preliminary settings, Data Source and Sampling
+The Yelp 2015 academic data set contains 5 files: business, checkin, review, tip and user, in a Json format. For this project, only the review data set was considered due to it has the "text" and "stars" variables, required for the analysis. The review file has 1.569.264 registers. Due to hardware limitations, it was impossible to process the whole information. Consequently, a random sample of 25% was taken to ensure an accurate representation of the total population, equivalent to 392.316 reviews. 
+
+```{r prelim_settings, echo=FALSE}
+# Setting working directory and loading required packages
+dataDir <- setwd("C:/Users/Larry Lugo/Documents/DataScience-Coursera/Capstone/Code")
+library(rjson)
+library(jsonlite)
+library(tm)
+library(SnowballC)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(rmarkdown)
+library(knitr)
+```
+
+```{r create_dataframe}
+# Creating data frame from Json files
+yelpReviewDataFilePath <- file.path(dataDir, "yelp_academic_dataset_review.json")
+yelpReviewData <- fromJSON(sprintf("[%s]", paste(readLines(yelpReviewDataFilePath), collapse = ",")), flatten = TRUE)
+
+# Remove unnecesary variables
+projData <- subset(yelpReviewData, select = -c(user_id, review_id, date, type, business_id, votes.funny, votes.useful, votes.cool))
+
+# Create dependent variable "Negative"
+projData$Negative = as.factor(projData$stars <= 2)
+
+# Save projData
+# saveRDS(projData, "projData.rds")
+```
+
+```{r take_25sample}
+# Re-load previously created tidy data frame "projData"
+# projData <- readRDS("projData.rds")
+
+# SAMPLING: Take a 25% sample = 392,316 records
+projData25 <- projData[sample(1:nrow(projData), 392316, replace=FALSE),]
+str(projData25)
+```
+
+### Text Mining
+A general text mining process involves (i) creating the corpus or collection of documents to be analyzed, in this case, the "text" variable that content the review written by users; (ii) cleaning the data through convert text to lower case, remove punctuation and stop words (like the, a, mine, yours, etc., they don't add value to the model). (iii) Stem the corpus in order to find the root of words to avoid repeating ones with similar structures like kind, kindly, kindless. After stemming, only kind remains in corpus. (iv) Create a Document Term Matrix that contains frequency of terms by review. (v) Delete sparse terms. Only those with a frequency with 5% or more were kept. (vi) And finally, Convert the tidy corpus to data frame to build the model, as showed here:
+
+```{r create_corpus}
+# Create corpus
+corpus = Corpus(VectorSource(projData25$text))
+# Convert to lower-case
+corpus <- tm_map(corpus, content_transformer(tolower))
+# Remove punctuation
+corpus = tm_map(corpus, removePunctuation)
+# Remove stopwords
+corpus = tm_map(corpus, removeWords, stopwords("english"))
+# Stem document 
+corpus = tm_map(corpus, stemDocument)
+```
+
+```{r create_dataFrame}
+# Create matrix
+frequencies = DocumentTermMatrix(corpus)
+# Check for sparsity. List words than appears 100,000 times or more in matrix
+findFreqTerms(frequencies, lowfreq=100000)
+# Remove Sparse terms than appear 5% or less
+sparse5 = removeSparseTerms(frequencies, 0.95)
+# Convert to a data frame
+sparse5DF = as.data.frame(as.matrix(sparse5))
+# Add dependent variable Negative to be predicted
+sparse5DF$Negative = projData25$Negative
+```
+
+### Build a CART model
+```{r build_CART}
+# Split the data
+set.seed(123)
+split = sample.split(sparse5DF$Negative, SplitRatio = 0.7)
+trainsparse5 = subset(sparse5DF, split==TRUE)
+testsparse5 = subset(sparse5DF, split==FALSE)
+# Build a CART model
+sparse5CART = rpart(Negative ~ ., data=trainsparse5, method="class")
+```
+
+## Results
+
+### Evaluate the performance of the model
+```{r eval_model}
+predictCART = predict(sparse5CART, newdata=testsparse5, type="class")
+table(testsparse5$Negative, predictCART)
+printcp(sparse5CART)
+```
+
+According to previous data, the CART model has an accuracy of `r ((93670+2531)/(93670+2531+456+20038))*100`% and a Root node error of 0.19204 (or 19.204%).
+
+### Visualize cross-validation results
+```{r crossval_results, fig.width=5, fig.height=4}
+plotcp(sparse5CART)
+```
+
+The figure above shows that Relative Error stabilizes with 3 variables, so model was adjusted with this number of variables showed on next issue and Tree Model below. It can be noticed that words told, great and love were the most significant.
+
+Please note that model CART was used to predict the class FALSE of dependent variable Negative. A FALSE class occured when a review has 3 or more stars, which means a favorable sentiment or positive valoration. If user gave 2 or less stars, then a Negative sentiment is TRUE.
+
+### Plot tree 
+```{r plot_tree, fig.width=5, fig.height=3, fig.align='center'}
+prp(sparse5CART)
+```
+
+## Discussion
+Using 25% of data Review, near four hundred thousand opinions, it was posible to develop a CART model to predict the user´s sentiment regarding their experience in different kind of business. 
+
+The model had an accuracy of 82.44% and a Root node error of  19.204%.  The Relative Error stabilizes with 3 variables, so model was adjusted with this number of variables, being words told, great and love the most significant.
+
+Sampling is really effective when there are hardware, time or economic limitations that makes imposible to analyze the whole data in huge files. To avoid this kind of limitations, technology like Hadoop or other server based one could be used.
+
+This study demonstrated that it is possible to predict favorable or unfavorable sentiment in user reviews based only on text written by them. To increase the accuracy of the model, it is recommended to incorporate other variables such as gender, location, hours of sevice, among others, but having adequate computing power according to study complexity.
+
+## References
+Yelp. 2015. The Yelp Dataset Challenge. Available: http://www.yelp.com/dataset_challenge
+Zhang, Y., Zhang, M., Liu, Y. and Ma, S., "Incorporating Phrase-level Sentiment Analysis on Textual
+Reviews for Personalized Recommendation", WSDM'15, February 2-6, 2015, Shanghai, China. Available: http://dx.doi.org/10.1145/2684822.269703.
